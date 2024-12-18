@@ -1,0 +1,112 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jul 3 14:33:49 2023
+
+@author: Rik
+"""
+
+import numpy as np
+from scipy.signal import place_poles
+import wis_2_2_utilities as util
+import wis_2_2_systems as systems
+
+# Timestep instellen
+timestep = 2e-3
+
+d = 0.02  # Diameter of breedte
+l = 0.6  # Lengte
+rho = 700  # Dichtheid
+m = rho*d*l*d  # Massa
+g = 9.81
+Icm = (1 / 12)*rho * d**2 *  l *(d**2 + l**2)
+I = 1/12 * rho * d**4 * l + 1/3 * rho * d**2 *l**3
+
+# Bereken matrices A en B
+M1 = np.array([
+    [1, 0, 0, 0],
+    [0, (3/2)*m*l**2+I, 0, (1/2)*m*l**2],
+    [0, 0, 1, 0],
+    [0, (3/4)*m*l**2+Icm, 0, (1/4)*m*l**2+Icm]
+])
+
+M2 = np.array([
+    [0, 1, 0, 0],
+    [(3/2)*m*g*l, 0, 0, 0],
+    [0, 0, 0, 1],
+    [(1/2)*m*g*l, 0, (1/2)*m*g*l, 0]
+])
+
+M3 = np.array([
+    [0],
+    [1],
+    [0],
+    [0]
+])
+
+# Gebruik matrixvermenigvuldiging
+A = np.linalg.inv(M1) @ M2
+B = np.linalg.inv(M1) @ M3
+
+print("Matrix A:\n", A)
+print("Matrix B:\n", B)
+
+
+
+# Pole-Placement Controller
+class pp_controller():
+    def __init__(self, A, B, desired_poles):
+        # Bereken K met pole placement
+        place_result = place_poles(A, B, desired_poles)
+        self.matrix_gain = place_result.gain_matrix
+        print("Bereken gain matrix K:")
+        print(self.matrix_gain)
+
+    def feedBack(self, observe):
+        # Feedback wet: u = -Kx
+        u = -self.matrix_gain @ observe
+        return u
+
+
+def main():
+    # Simulatiemodel
+    model = systems.stacked_inverted_pendulum(num_pendulum=2)
+
+    # Gewenste polen voor pole placement
+    desired_poles = [-3, -6, -9, -12]
+
+    # Maak de Pole-Placement controller aan
+    control = pp_controller(A, B, desired_poles)
+
+    # Simulatie-instellingen
+    simulation = util.simulation(model=model, timestep=timestep)
+    simulation.setCost()
+    simulation.max_duration = 3  # Simulatieduur in seconden
+    simulation.GIF_toggle = False  # Zet GIF-creatie uit
+
+    # Variabele om kosten bij te houden
+    total_cost = 0
+
+       # Simulatie loop
+    while simulation.vis.Run():
+        if simulation.time < simulation.max_duration:
+            simulation.step()
+            observe = simulation.observe()
+            u = control.feedBack(observe)
+            simulation.control(u)
+            simulation.log()
+
+            # Bereken kosten: u^2 * timestep (converteer u naar float)
+            total_cost += (float(u) ** 2) * timestep
+
+            simulation.refreshTime()
+        else:
+            print('Ending visualisation...')
+            simulation.vis.GetDevice().closeDevice()
+
+    # Data schrijven en kosten tonen
+    simulation.writeData()
+    print(f"Total kosten (integraal van u^2): {total_cost:.4f}")
+
+
+if __name__ == "__main__":
+    main()
